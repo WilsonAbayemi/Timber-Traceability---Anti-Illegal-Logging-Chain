@@ -12,6 +12,7 @@
 (define-constant err-vote-period-ended (err u108))
 (define-constant err-already-voted (err u109))
 (define-constant err-insufficient-votes (err u110))
+(define-constant err-invalid-region (err u111))
 
 (define-non-fungible-token timber-log uint)
 
@@ -52,6 +53,37 @@
 
 (define-data-var proposal-counter uint u0)
 
+(define-map regional-analytics
+  (string-ascii 32)
+  {
+    total-harvested: uint,
+    total-processed: uint,
+    total-finalized: uint,
+    avg-processing-time: uint,
+    sustainability-score: uint
+  }
+)
+
+(define-map harvester-performance
+  principal
+  {
+    total-logs: uint,
+    avg-processing-time: uint,
+    quality-rating: uint,
+    last-harvest: uint,
+    efficiency-score: uint
+  }
+)
+
+(define-map species-tracking
+  (string-ascii 32)
+  {
+    total-count: uint,
+    regions: (list 10 (string-ascii 32)),
+    avg-processing-time: uint
+  }
+)
+
 (define-public (get-last-token-id)
   (ok (var-get last-token-id))
 )
@@ -81,15 +113,23 @@
   (gps-lat int) 
   (gps-lon int) 
   (harvest-license (string-ascii 64))
-  (species (string-ascii 32)))
+  (species (string-ascii 32))
+  (region (string-ascii 32)))
   (let
     (
       (token-id (+ (var-get last-token-id) u1))
+      (current-region-data (default-to {total-harvested: u0, total-processed: u0, total-finalized: u0, avg-processing-time: u0, sustainability-score: u100} 
+                                      (map-get? regional-analytics region)))
+      (current-harvester-data (default-to {total-logs: u0, avg-processing-time: u0, quality-rating: u100, last-harvest: u0, efficiency-score: u100} 
+                                          (map-get? harvester-performance tx-sender)))
+      (current-species-data (default-to {total-count: u0, regions: (list), avg-processing-time: u0} 
+                                        (map-get? species-tracking species)))
     )
     (asserts! (not (default-to false (map-get? blacklisted-harvesters tx-sender))) err-already-blacklisted)
     (asserts! (and (>= gps-lat (* -90 1000000)) (<= gps-lat (* 90 1000000))) err-invalid-coordinates)
     (asserts! (and (>= gps-lon (* -180 1000000)) (<= gps-lon (* 180 1000000))) err-invalid-coordinates)
     (asserts! (> (len harvest-license) u0) err-invalid-license)
+    (asserts! (> (len region) u0) err-invalid-region)
     
     (try! (nft-mint? timber-log token-id tx-sender))
     (map-set timber-metadata token-id {
@@ -103,6 +143,30 @@
       current-owner: tx-sender,
       status: "harvested"
     })
+    
+    (map-set regional-analytics region 
+      (merge current-region-data {total-harvested: (+ (get total-harvested current-region-data) u1)}))
+    
+    (map-set harvester-performance tx-sender 
+      (merge current-harvester-data {
+        total-logs: (+ (get total-logs current-harvester-data) u1),
+        last-harvest: stacks-block-height
+      }))
+    
+    (let
+      (
+        (current-regions (get regions current-species-data))
+        (updated-regions (if (is-none (index-of current-regions region))
+                            (unwrap-panic (as-max-len? (append current-regions region) u10))
+                            current-regions))
+      )
+      (map-set species-tracking species 
+        (merge current-species-data {
+          total-count: (+ (get total-count current-species-data) u1),
+          regions: updated-regions
+        }))
+    )
+    
     (var-set last-token-id token-id)
     (ok token-id)
   )
@@ -126,15 +190,44 @@
   )
 )
 
-(define-public (finalize-product (token-id uint))
+(define-public (finalize-product (token-id uint) (region (string-ascii 32)))
   (let
     (
       (metadata (unwrap! (map-get? timber-metadata token-id) err-nft-not-found))
+      (current-region-data (default-to {total-harvested: u0, total-processed: u0, total-finalized: u0, avg-processing-time: u0, sustainability-score: u100} 
+                                      (map-get? regional-analytics region)))
+      (processing-time (- stacks-block-height (get harvest-timestamp metadata)))
+      (current-harvester-data (default-to {total-logs: u0, avg-processing-time: u0, quality-rating: u100, last-harvest: u0, efficiency-score: u100} 
+                                          (map-get? harvester-performance (get harvester metadata))))
     )
     (asserts! (is-eq (some tx-sender) (nft-get-owner? timber-log token-id)) err-not-token-owner)
+    (asserts! (> (len region) u0) err-invalid-region)
     
     (map-set timber-metadata token-id 
       (merge metadata {status: "final-product"}))
+    
+    (map-set regional-analytics region 
+      (merge current-region-data {
+        total-finalized: (+ (get total-finalized current-region-data) u1),
+        avg-processing-time: (/ (+ (* (get avg-processing-time current-region-data) (get total-finalized current-region-data)) processing-time) 
+                                (+ (get total-finalized current-region-data) u1))
+      }))
+    
+    (let
+      (
+        (harvester-logs (get total-logs current-harvester-data))
+        (new-avg-time (if (> harvester-logs u0)
+                         (/ (+ (* (get avg-processing-time current-harvester-data) harvester-logs) processing-time) 
+                            (+ harvester-logs u1))
+                         processing-time))
+      )
+      (map-set harvester-performance (get harvester metadata)
+        (merge current-harvester-data {
+          avg-processing-time: new-avg-time,
+          efficiency-score: (if (< processing-time u100) u100 (- u200 (/ processing-time u10)))
+        }))
+    )
+    
     (ok true)
   )
 )
@@ -259,4 +352,71 @@
     vote-period: (var-get vote-period),
     proposal-counter: (var-get proposal-counter)
   }
+)
+
+(define-read-only (get-regional-analytics (region (string-ascii 32)))
+  (map-get? regional-analytics region)
+)
+
+(define-read-only (get-harvester-performance (harvester principal))
+  (map-get? harvester-performance harvester)
+)
+
+(define-read-only (get-species-analytics (species (string-ascii 32)))
+  (map-get? species-tracking species)
+)
+
+(define-read-only (calculate-sustainability-score (region (string-ascii 32)))
+  (let
+    (
+      (region-data (map-get? regional-analytics region))
+    )
+    (match region-data
+      data (let
+        (
+          (total-harvested (get total-harvested data))
+          (total-finalized (get total-finalized data))
+          (avg-time (get avg-processing-time data))
+          (completion-rate (if (> total-harvested u0) (/ (* total-finalized u100) total-harvested) u0))
+          (efficiency-bonus (if (< avg-time u50) u20 (if (< avg-time u100) u10 u0)))
+        )
+        (ok (+ completion-rate efficiency-bonus))
+      )
+      (ok u0)
+    )
+  )
+)
+
+(define-read-only (get-top-performing-harvesters (limit uint))
+  (ok "Analytics feature requires off-chain indexing for complex queries")
+)
+
+(define-public (update-harvester-quality-rating (harvester principal) (rating uint))
+  (let
+    (
+      (current-data (default-to {total-logs: u0, avg-processing-time: u0, quality-rating: u100, last-harvest: u0, efficiency-score: u100} 
+                                (map-get? harvester-performance harvester)))
+    )
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= rating u100) err-invalid-coordinates)
+    
+    (map-set harvester-performance harvester 
+      (merge current-data {quality-rating: rating}))
+    (ok true)
+  )
+)
+
+(define-public (update-regional-sustainability (region (string-ascii 32)) (score uint))
+  (let
+    (
+      (current-data (default-to {total-harvested: u0, total-processed: u0, total-finalized: u0, avg-processing-time: u0, sustainability-score: u100} 
+                                (map-get? regional-analytics region)))
+    )
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= score u100) err-invalid-coordinates)
+    
+    (map-set regional-analytics region 
+      (merge current-data {sustainability-score: score}))
+    (ok true)
+  )
 )
