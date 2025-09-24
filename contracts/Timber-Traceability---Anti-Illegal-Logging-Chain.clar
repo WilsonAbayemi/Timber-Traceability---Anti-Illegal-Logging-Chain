@@ -420,3 +420,17 @@
     (ok true)
   )
 )
+
+(define-constant burn-address 'ST000000000000000000002AMW42H)
+
+(define-public (retire-timber (token-id uint))
+  (let
+    (
+      (metadata (unwrap! (map-get? timber-metadata token-id) err-nft-not-found))
+    )
+    (asserts! (is-eq (some tx-sender) (nft-get-owner? timber-log token-id)) err-not-token-owner)
+    (try! (nft-transfer? timber-log token-id tx-sender burn-address))
+    (map-set timber-metadata token-id (merge metadata {status: "retired"}))
+    (ok true)
+  )
+)

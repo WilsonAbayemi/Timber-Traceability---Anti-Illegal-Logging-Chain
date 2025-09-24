@@ -174,3 +174,32 @@ For support, please open an issue in the GitHub repository or contact the develo
 ---
 
 Built with 💚 for forest conservation and supply chain transparency
+
+### 🌱 Sustainability Functions
+
+#### `retire-timber`
+Allows timber NFT owners to permanently retire their tokens for environmental pledges, transferring them to a burn address and marking as retired.
+```clarity
+(retire-timber token-id)
+```
+
+## 📊 Updated Usage Examples
+
+### For Eco-Conscious Owners 🌍
+
+1. Retire timber NFT for sustainability:
+```clarity
+(contract-call? .timber-contract retire-timber u1)
+```
+
+## 🔒 Updated Security Features
+
+- **Timber Retirement**: Secure, one-way retirement process for environmental commitments
+- **Burn Address Protection**: NFTs transferred to dedicated burn address for permanent removal
+
+## 🌍 Enhanced Environmental Impact
+
+This system now supports active environmental stewardship by:
+- 🌱 Enabling permanent timber retirement for carbon offset programs
+- 🔥 Providing blockchain-verified sustainability pledges
+- 📈 Expanding traceability to include retirement status for full lifecycle transparency
